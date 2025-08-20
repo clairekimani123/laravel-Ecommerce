@@ -2,9 +2,123 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Payment;
 use Illuminate\Http\Request;
+use GuzzleHttp\Client;
 
 class PaymentController extends Controller
 {
-    //
+    public function __construct()
+    {
+        $this->middleware('auth:sanctum');
+    }
+
+    public function index()
+    {
+        return Payment::all();
+    }
+
+    public function store(Request $request)
+    {
+        $validated = $request->validate([
+            'customer_id' => 'required|exists:customers,id',
+            'trans_date' => 'required|date',
+            'trans_ref' => 'required|string|unique:payments,trans_ref',
+            'amount' => 'required|numeric',
+            'payload' => 'nullable|json',
+        ]);
+
+        return Payment::create($validated);
+    }
+
+    public function show(Payment $payment)
+    {
+        return $payment;
+    }
+
+    public function update(Request $request, Payment $payment)
+    {
+        $validated = $request->validate([
+            'trans_date' => 'date',
+            'trans_ref' => 'string|unique:payments,trans_ref,' . $payment->id,
+            'amount' => 'numeric',
+            'payload' => 'nullable|json',
+        ]);
+
+        $payment->update($validated);
+        return $payment;
+    }
+
+    public function destroy(Payment $payment)
+    {
+        $payment->delete();
+        return response()->json(['message' => 'Deleted']);
+    }
+
+    public function initiateMpesa(Request $request)
+    {
+        $validated = $request->validate([
+            'customer_id' => 'required|exists:customers,id',
+            'amount' => 'required|numeric',
+            'phone' => 'required|string',
+            'cart_id' => 'required|exists:carts,id',
+        ]);
+
+        $customer = \App\Models\Customer::find($validated['customer_id']);
+        $cart = \App\Models\Cart::find($validated['cart_id']);
+
+        $client = new Client();
+        $consumerKey = env('MPESA_CONSUMER_KEY');
+        $consumerSecret = env('MPESA_CONSUMER_SECRET');
+        $credentials = base64_encode($consumerKey . ':' . $consumerSecret);
+        $tokenResponse = $client->request('GET', 'https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials', [
+            'headers' => ['Authorization' => 'Basic ' . $credentials],
+        ]);
+        $token = json_decode((string) $tokenResponse->getBody())->access_token;
+
+        $shortcode = env('MPESA_SHORTCODE');
+        $passkey = env('MPESA_PASSKEY');
+        $timestamp = date('YmdHis');
+        $password = base64_encode($shortcode . $passkey . $timestamp);
+        $callbackUrl = env('MPESA_CALLBACK_URL');
+
+        $stkResponse = $client->request('POST', 'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest', [
+            'headers' => [
+                'Authorization' => 'Bearer ' . $token,
+                'Content-Type' => 'application/json',
+            ],
+            'json' => [
+                'BusinessShortCode' => $shortcode,
+                'Password' => $password,
+                'Timestamp' => $timestamp,
+                'TransactionType' => 'CustomerPayBillOnline',
+                'Amount' => $validated['amount'],
+                'PartyA' => $validated['phone'],
+                'PartyB' => $shortcode,
+                'PhoneNumber' => $validated['phone'],
+                'CallBackURL' => $callbackUrl,
+                'AccountReference' => 'Order' . $cart->id,
+                'TransactionDesc' => 'Payment for cart ' . $cart->id,
+            ],
+        ]);
+
+        $responseData = json_decode((string) $stkResponse->getBody());
+
+        if (isset($responseData->ResponseCode) && $responseData->ResponseCode == 0) {
+            $payment = Payment::create([
+                'customer_id' => $validated['customer_id'],
+                'trans_date' => now(),
+                'trans_ref' => $responseData->CheckoutRequestID,
+                'amount' => $validated['amount'],
+                'payload' => json_encode($responseData),
+            ]);
+
+            $cart->payment_id = $payment->id;
+            $cart->save();
+
+            return response()->json(['message' => 'STK Push initiated', 'data' => $responseData]);
+        }
+
+        return response()->json(['error' => 'Failed to initiate payment', 'data' => $responseData], 400);
+    }
 }

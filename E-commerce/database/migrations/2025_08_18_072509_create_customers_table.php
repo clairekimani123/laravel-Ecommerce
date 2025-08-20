@@ -16,8 +16,12 @@ return new class extends Migration
             $table->string('name');
             $table->string('phone')->index();
             $table->string('location')->nullable();
-            $table->string('email')->nullable()->unique();
-            $table->timestamps();
+            $table->string('email')->nullable()->unique()->index();
+            $table->string('password')->after('location');
+            $table->rememberToken()->nullable();
+            $table->timestamp('email_verified_at')->nullable();
+
+
         });
     }
 
@@ -26,6 +30,8 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('customers');
+        Schema::table('customers', function (Blueprint $table) {
+            $table->dropColumn('password');
+        });
     }
 };

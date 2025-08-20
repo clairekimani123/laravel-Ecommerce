@@ -11,13 +11,13 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('payments', function (Blueprint $table) {
+        Schema::create('carts', function (Blueprint $table) {
             $table->id();
-            $table->unsignedBigInteger('customer_id'); 
-            $table->dateTime('trans_date');
-            $table->string('trans_ref')->unique();   // Mpesa reference, etc.
-            $table->decimal('amount', 12, 2);
-            $table->json('payload')->nullable();     // raw Mpesa JSON
+            $table->unsignedBigInteger('vendor_id')->nullable();
+            $table->unsignedBigInteger('customer_id')->nullable();
+            $table->unsignedInteger('total_quantity')->default(0);
+            $table->decimal('total_price')->default(0);
+            $table->unsignedBigInteger('payment_id')->nullable();
             $table->timestamps();
         });
     }
@@ -27,6 +27,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('payments');
+        Schema::dropIfExists('carts');
     }
 };
