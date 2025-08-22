@@ -10,7 +10,7 @@ class PaymentController extends Controller
 {
     public function __construct()
     {
-        $this->middleware('auth:sanctum');
+        $this->middleware('auth:sanctum')->only(['store', 'update', 'destroy']);
     }
 
     public function index()
@@ -18,24 +18,23 @@ class PaymentController extends Controller
         return Payment::all();
     }
 
-    public function store(Request $request)
-    {
-        $validated = $request->validate([
-            'customer_id' => 'required|exists:customers,id',
-            'trans_date' => 'required|date',
-            'trans_ref' => 'required|string|unique:payments,trans_ref',
-            'amount' => 'required|numeric',
-            'payload' => 'nullable|json',
-        ]);
+   public function store(Request $request)
+{
+    $validated = $request->validate([
+        'customer_id' => 'required|exists:customers,id',
+        'amount' => 'required|numeric',
 
-        return Payment::create($validated);
-    }
+    ]);
+
+    $validated['trans_date'] = now();
+    $validated['trans_ref'] = uniqid('txn_');
+    return Payment::create($validated);
+}
 
     public function show(Payment $payment)
     {
         return $payment;
     }
-
     public function update(Request $request, Payment $payment)
     {
         $validated = $request->validate([
@@ -121,4 +120,53 @@ class PaymentController extends Controller
 
         return response()->json(['error' => 'Failed to initiate payment', 'data' => $responseData], 400);
     }
+
+
+    public function mpesaCallback(Request $request)
+{
+    \Log::info('Mpesa Callback Data:', $request->all());
+
+    $data = $request->all();
+
+    if (isset($data['Body']['stkCallback'])) {
+        $callback = $data['Body']['stkCallback'];
+
+        $checkoutRequestID = $callback['CheckoutRequestID'];
+        $resultCode = $callback['ResultCode'];
+        $resultDesc = $callback['ResultDesc'];
+
+        $payment = Payment::where('trans_ref', $checkoutRequestID)->first();
+
+        if ($payment) {
+            if ($resultCode == 0) {
+
+                $amount = $callback['CallbackMetadata']['Item'][0]['Value'] ?? null;
+                $mpesaReceipt = $callback['CallbackMetadata']['Item'][1]['Value'] ?? null;
+
+                $payment->update([
+                    'trans_date' => now(),
+                    'payload' => json_encode($callback),
+                    'trans_ref' => $mpesaReceipt,
+                ]);
+
+                if ($payment->cart) {
+                    $payment->cart->status = 'paid';
+                    $payment->cart->save();
+                }
+            } else {
+
+                $payment->update([
+                    'payload' => json_encode($callback),
+                ]);
+            }
+        }
+    }
+
+    
+    return response()->json([
+        'ResultCode' => 0,
+        'ResultDesc' => 'Success'
+    ]);
+}
+
 }
