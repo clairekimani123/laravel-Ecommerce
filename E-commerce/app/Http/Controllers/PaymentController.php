@@ -54,52 +54,60 @@ class PaymentController extends Controller
         return response()->json(['message' => 'Deleted']);
     }
 
-    public function initiateMpesa(Request $request)
-    {
-        $validated = $request->validate([
-            'customer_id' => 'required|exists:customers,id',
-            'amount' => 'required|numeric',
-            'phone' => 'required|string',
-            'cart_id' => 'required|exists:carts,id',
-        ]);
+public function initiateMpesa(Request $request)
+{
+    $validated = $request->validate([
+        'customer_id' => 'required|exists:customers,id',
+        'amount' => 'required|numeric',
+        'phone' => 'required|string',
+        'cart_id' => 'required|exists:carts,id',
+    ]);
 
-        $customer = \App\Models\Customer::find($validated['customer_id']);
-        $cart = \App\Models\Cart::find($validated['cart_id']);
+    $customer = \App\Models\Customer::find($validated['customer_id']);
+    $cart = \App\Models\Cart::find($validated['cart_id']);
 
-        $client = new Client();
-        $consumerKey = env('MPESA_CONSUMER_KEY');
-        $consumerSecret = env('MPESA_CONSUMER_SECRET');
-        $credentials = base64_encode($consumerKey . ':' . $consumerSecret);
-        $tokenResponse = $client->request('GET', 'https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials', [
-            'headers' => ['Authorization' => 'Basic ' . $credentials],
-        ]);
-        $token = json_decode((string) $tokenResponse->getBody())->access_token;
+    $client = new Client();
+    $consumerKey = env('MPESA_CONSUMER_KEY');
+    $consumerSecret = env('MPESA_CONSUMER_SECRET');
+    $credentials = base64_encode($consumerKey . ':' . $consumerSecret);
 
-        $shortcode = env('MPESA_SHORTCODE');
-        $passkey = env('MPESA_PASSKEY');
-        $timestamp = date('YmdHis');
-        $password = base64_encode($shortcode . $passkey . $timestamp);
-        $callbackUrl = env('MPESA_CALLBACK_URL');
+    $tokenResponse = $client->request('GET',
+        'https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials',
+        ['headers' => ['Authorization' => 'Basic ' . $credentials]]
+    );
+    $token = json_decode((string) $tokenResponse->getBody())->access_token;
 
-        $stkResponse = $client->request('POST', 'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest', [
-            'headers' => [
-                'Authorization' => 'Bearer ' . $token,
-                'Content-Type' => 'application/json',
-            ],
-            'json' => [
-                'BusinessShortCode' => $shortcode,
-                'Password' => $password,
-                'Timestamp' => $timestamp,
-                'TransactionType' => 'CustomerPayBillOnline',
-                'Amount' => $validated['amount'],
-                'PartyA' => $validated['phone'],
-                'PartyB' => $shortcode,
-                'PhoneNumber' => $validated['phone'],
-                'CallBackURL' => $callbackUrl,
-                'AccountReference' => 'Order' . $cart->id,
-                'TransactionDesc' => 'Payment for cart ' . $cart->id,
-            ],
-        ]);
+    $shortcode = env('MPESA_SHORTCODE');
+    $passkey = env('MPESA_PASSKEY');
+    $timestamp = date('YmdHis');
+    $password = base64_encode($shortcode . $passkey . $timestamp);
+    $callbackUrl = env('MPESA_CALLBACK_URL');
+
+    $payload = [
+        'BusinessShortCode' => $shortcode,
+        'Password' => $password,
+        'Timestamp' => $timestamp,
+        'TransactionType' => 'CustomerPayBillOnline',
+        'Amount' => $validated['amount'],
+        'PartyA' => $validated['phone'],
+        'PartyB' => $shortcode,
+        'PhoneNumber' => $validated['phone'],
+        'CallBackURL' => $callbackUrl,
+        'AccountReference' => 'Order' . $cart->id,
+        'TransactionDesc' => 'Payment for cart ' . $cart->id,
+    ];
+
+    try {
+        $stkResponse = $client->request('POST',
+            'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest',
+            [
+                'headers' => [
+                    'Authorization' => 'Bearer ' . $token,
+                    'Content-Type' => 'application/json',
+                ],
+                'json' => $payload,
+            ]
+        );
 
         $responseData = json_decode((string) $stkResponse->getBody());
 
@@ -119,7 +127,15 @@ class PaymentController extends Controller
         }
 
         return response()->json(['error' => 'Failed to initiate payment', 'data' => $responseData], 400);
+
+    } catch (\GuzzleHttp\Exception\RequestException $e) {
+        \Log::error("Mpesa Error: " . $e->getResponse()->getBody()->getContents());
+        return response()->json([
+            'message' => 'Mpesa STK push failed',
+            'error' => $e->getMessage()
+        ], 500);
     }
+}
 
 
     public function mpesaCallback(Request $request)
@@ -162,7 +178,7 @@ class PaymentController extends Controller
         }
     }
 
-    
+
     return response()->json([
         'ResultCode' => 0,
         'ResultDesc' => 'Success'

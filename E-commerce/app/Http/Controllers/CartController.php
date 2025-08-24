@@ -20,14 +20,32 @@ class CartController extends Controller
     }
 
     public function store(Request $request)
-    {
-        $validated = $request->validate([
-            'vendor_id' => 'nullable|exists:vendors,id',
-            'customer_id' => 'nullable|exists:customers,id',
-        ]);
+{
+    $validated = $request->validate([
+        'vendor_id' => 'nullable|exists:vendors,id',
+        'customer_id' => 'nullable|exists:customers,id',
+        'items' => 'required|array',
+        'items.*.product_id' => 'required|integer|exists:products,id',
+        'items.*.name' => 'required|string|max:255',
+        'items.*.quantity' => 'required|integer|min:1',
+        'items.*.price' => 'required|numeric|min:0',
+    ]);
 
-        return Cart::create($validated);
-    }
+    $totalQuantity = collect($validated['items'])->sum('quantity');
+    $totalPrice = collect($validated['items'])->sum(function ($item) {
+        return $item['quantity'] * $item['price'];
+    });
+
+    $cart = Cart::create([
+        'vendor_id' => $validated['vendor_id'] ?? null,
+        'customer_id' => $validated['customer_id'] ?? null,
+        'items' => $validated['items'],
+        'total_quantity' => $totalQuantity,
+        'total_price' => $totalPrice,
+    ]);
+
+    return response()->json($cart, 201);
+}
 
     public function show(Cart $cart)
     {
@@ -35,18 +53,31 @@ class CartController extends Controller
     }
 
     public function update(Request $request, Cart $cart)
-    {
-        $validated = $request->validate([
-            'vendor_id' => 'nullable|exists:vendors,id',
-            'customer_id' => 'nullable|exists:customers,id',
-            'payment_id' => 'nullable|exists:payments,id',
-        ]);
+{
+    $validated = $request->validate([
+        'vendor_id' => 'nullable|exists:vendors,id',
+        'customer_id' => 'nullable|exists:customers,id',
+        'payment_id' => 'nullable|exists:payments,id',
+        'items' => 'nullable|array',
+        'items.*.product_id' => 'required_with:items|integer|exists:products,id',
+        'items.*.name' => 'required_with:items|string|max:255',
+        'items.*.quantity' => 'required_with:items|integer|min:1',
+        'items.*.price' => 'required_with:items|numeric|min:0',
+    ]);
 
-        $cart->total_quantity = $cart->items->sum('quantity');
-        $cart->total_price = $cart->items->sum(fn($item) => $item->quantity * $item->price);
-        $cart->update($validated);
-        return $cart;
+    if (isset($validated['items'])) {
+        $cart->items = $validated['items'];
+        $cart->total_quantity = collect($validated['items'])->sum('quantity');
+        $cart->total_price = collect($validated['items'])->sum(
+            fn($item) => $item['quantity'] * $item['price']
+        );
     }
+
+    $cart->update($validated);
+
+    return response()->json($cart);
+}
+
 
     public function destroy(Cart $cart)
     {

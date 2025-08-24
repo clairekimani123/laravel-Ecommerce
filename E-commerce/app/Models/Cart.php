@@ -12,6 +12,11 @@ class Cart extends Model
         'total_quantity',
         'total_price',
         'payment_id',
+        'items',
+    ];
+
+     protected $casts = [
+        'items' => 'array',
     ];
 
     public function customer()
