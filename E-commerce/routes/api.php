@@ -7,6 +7,7 @@ use App\Http\Controllers\CartController;
 use App\Http\Controllers\CartItemController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\SmsController;
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::resource('products', ProductController::class);
@@ -22,5 +23,9 @@ Route::middleware('auth:sanctum')->group(function () {
 Route::post('auth/login', [AuthController::class, 'login']);
 Route::post('auth/register', [AuthController::class, 'register']);
 Route::post('payments/mpesa/callback', [PaymentController::class, 'mpesaCallback']);
+Route::post('sms', [SmsController::class, 'sendsms']);
+// Route::post('/carts/{cart}/checkout', [CartController::class, 'checkout']);
+
+
 
 ?>
