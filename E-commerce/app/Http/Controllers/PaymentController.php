@@ -4,10 +4,12 @@ namespace App\Http\Controllers;
 
 use App\Models\Payment;
 use Illuminate\Http\Request;
-use GuzzleHttp\Client;
+use App\Traits\Mpesa;
 
 class PaymentController extends Controller
 {
+    use Mpesa;
+
     public function __construct()
     {
         $this->middleware('auth:sanctum')->only(['store', 'update', 'destroy']);
@@ -18,23 +20,36 @@ class PaymentController extends Controller
         return Payment::all();
     }
 
-   public function store(Request $request)
-{
-    $validated = $request->validate([
-        'customer_id' => 'required|exists:customers,id',
-        'amount' => 'required|numeric',
+    public function store(Request $request)
+    {
+        $validated = $request->validate([
+            'customer_id' => 'required|exists:customers,id',
+            'amount' => 'required|numeric',
+            'phone' => 'required|string', // Added for M-Pesa STK push
+        ]);
 
-    ]);
+        $validated['trans_date'] = now();
+        $validated['trans_ref'] = uniqid('txn_');
+        $payment = Payment::create($validated);
 
-    $validated['trans_date'] = now();
-    $validated['trans_ref'] = uniqid('txn_');
-    return Payment::create($validated);
-}
+        // Integrate M-Pesa STK push
+        $token = $this->getAccessToken();
+        if ($token) {
+            $cart = $payment->cart; // Assuming a relationship exists
+            $stkResponse = $this->sendStkPushRequest($validated, $cart, $token);
+            if ($stkResponse && isset($stkResponse->CheckoutRequestID)) {
+                $payment->update(['trans_ref' => $stkResponse->CheckoutRequestID]);
+            }
+        }
+
+        return $payment;
+    }
 
     public function show(Payment $payment)
     {
         return $payment;
     }
+
     public function update(Request $request, Payment $payment)
     {
         $validated = $request->validate([
@@ -53,120 +68,4 @@ class PaymentController extends Controller
         $payment->delete();
         return response()->json(['message' => 'Deleted']);
     }
-    
-     public function getAccessToken()
-    {
-        $client = new Client();
-        $consumerKey = env('MPESA_CONSUMER_KEY');
-        $consumerSecret = env('MPESA_CONSUMER_SECRET');
-        $credentials = base64_encode($consumerKey . ':' . $consumerSecret);
-
-        try {
-            $tokenResponse = $client->request('GET',
-                'https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials',
-                ['headers' => ['Authorization' => 'Basic ' . $credentials]]
-            );
-
-            $token = json_decode((string) $tokenResponse->getBody())->access_token;
-            Log::info("Mpesa Token: " . $token);
-            return $token;
-
-        } catch (\Exception $e) {
-            Log::error("Mpesa Token Error: " . $e->getMessage());
-            return null;
-        }
-    }
-
-
-    public function stkPushRequest($validated, $cart, $token)
-    {
-        $client = new Client();
-        $shortcode = env('MPESA_SHORTCODE');
-        $passkey = env('MPESA_PASSKEY');
-        $timestamp = date('YmdHis');
-        $password = base64_encode($shortcode . $passkey . $timestamp);
-        $callbackUrl = env('MPESA_CALLBACK_URL');
-
-        $payload = [
-            'BusinessShortCode' => $shortcode,
-            'Password' => $password,
-            'Timestamp' => $timestamp,
-            'TransactionType' => 'CustomerPayBillOnline',
-            'Amount' => $validated['amount'],
-            'PartyA' => $validated['phone'],
-            'PartyB' => $shortcode,
-            'PhoneNumber' => $validated['phone'],
-            'CallBackURL' => $callbackUrl,
-            'AccountReference' => 'Order' . $cart->id,
-            'TransactionDesc' => 'Payment for cart ' . $cart->id,
-        ];
-
-        try {
-            $stkResponse = $client->request('POST',
-                'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest',
-                [
-                    'headers' => [
-                        'Authorization' => 'Bearer ' . $token,
-                        'Content-Type' => 'application/json',
-                    ],
-                    'json' => $payload,
-                ]
-            );
-
-            return json_decode((string) $stkResponse->getBody());
-
-        } catch (\Exception $e) {
-            Log::error("Mpesa STK Error: " . $e->getMessage());
-            return null;
-        }
-    }
-
-    public function mpesaCallback(Request $request)
-{
-    \Log::info('Mpesa Callback Data:', $request->all());
-
-    $data = $request->all();
-
-    if (isset($data['Body']['stkCallback'])) {
-        $callback = $data['Body']['stkCallback'];
-
-        $checkoutRequestID = $callback['CheckoutRequestID'];
-        $resultCode = $callback['ResultCode'];
-        $resultDesc = $callback['ResultDesc'];
-
-        $payment = Payment::where('trans_ref', $checkoutRequestID)->first();
-
-        if ($payment) {
-            if ($resultCode == 0) {
-
-                $amount = $callback['CallbackMetadata']['Item'][0]['Value'] ?? null;
-                $mpesaReceipt = $callback['CallbackMetadata']['Item'][1]['Value'] ?? null;
-
-                $payment->update([
-                    'trans_date' => now(),
-                    'payload' => json_encode($callback),
-                    'trans_ref' => $mpesaReceipt,
-                ]);
-
-                if ($payment->cart) {
-                    $payment->cart->status = 'paid';
-                    $payment->cart->save();
-                }
-            } else {
-
-                $payment->update([
-                    'payload' => json_encode($callback),
-                ]);
-            }
-        }
-    }
-
-
-    return response()->json([
-        'ResultCode' => 0,
-        'ResultDesc' => 'Success'
-    ]);
 }
-
-}
-
